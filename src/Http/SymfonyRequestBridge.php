@@ -5,9 +5,11 @@ namespace Bref\LaravelBridge\Http;
 use Bref\Context\Context;
 use Bref\Event\Http\Psr7Bridge;
 use Bref\Event\Http\HttpRequestEvent;
-
-use Symfony\Component\HttpFoundation\Request;
+use Bref\LaravelBridge\Support\MultipartArray;
+use Illuminate\Support\Arr;
+use Riverline\MultiPartParser\Part;
 use Symfony\Bridge\PsrHttpMessage\Factory\HttpFoundationFactory;
+use Symfony\Component\HttpFoundation\Request;
 
 class SymfonyRequestBridge
 {
@@ -30,6 +32,40 @@ class SymfonyRequestBridge
             'LAMBDA_REQUEST_CONTEXT' => json_encode($event->getRequestContext()),
         ]);
 
+        $contentType = $event->getContentType();
+
+        if ($event->getMethod() === 'POST' && $contentType !== null && str_starts_with(strtolower($contentType), 'multipart/form-data')) {
+            $symfonyRequest->request->replace(self::fixMultipartArrayStructure($event, $contentType));
+        }
+
         return $symfonyRequest;
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private static function fixMultipartArrayStructure(HttpRequestEvent $event, string $contentType): array
+    {
+        $document = new Part("Content-type: $contentType\r\n\r\n".$event->getBody());
+
+        if (! $document->isMultiPart()) {
+            return [];
+        }
+
+        $fixed = [];
+
+        foreach ($document->getParts() as $part) {
+            if ($part->isFile()) {
+                continue;
+            }
+
+            $name = $part->getName();
+
+            $fixed = str_contains($name, '[')
+                ? MultipartArray::setMultiPartArrayValue($fixed, $name, $part->getBody())
+                : Arr::set($fixed, $name, $part->getBody());
+        }
+
+        return $fixed;
     }
 }
